@@ -1,0 +1,5 @@
+#include? "Pods/Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"
+#include "Generated.xcconfig"
+
+// Google ML Kit ships no arm64 simulator slice; build the simulator as x86_64.
+EXCLUDED_ARCHS[sdk=iphonesimulator*] = arm64
