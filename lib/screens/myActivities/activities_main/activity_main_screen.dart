@@ -241,10 +241,12 @@ class _ActivitiesScreenState extends State<ActivitiesScreen>
                             builder: (context) => const ConfigurationScreen(),
                           ),
                         ).then((_) async {
-                          if (mounted) {
-                            await Provider.of<OdooClientManager>(context, listen: false).updateUserImage();
-                            setState(() {});
-                          }
+                          if (!mounted) return;
+                          await Provider.of<OdooClientManager>(context, listen: false).updateUserImage();
+                          // Switching account there replaces the whole stack, so
+                          // this screen can be gone once the image has loaded.
+                          if (!mounted) return;
+                          setState(() {});
                         });
                       },
                       child: CircleAvatar(

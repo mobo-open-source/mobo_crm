@@ -196,6 +196,12 @@ class OdooCompat {
   }
 
   static bool _isMissingModel(Object e) {
+    // An HTML page (a dead session, or a server that can't tell which
+    // database the call is for) is an unreadable answer, not proof the model
+    // is missing. Its "404 Not Found" title would match below and pin the
+    // model as absent for the rest of the run, switching field adaptation
+    // off for it even after the session is renewed.
+    if (e is FormatException) return false;
     final msg = e.toString().toLowerCase();
     return msg.contains('404') ||
         msg.contains("doesn't exist") ||

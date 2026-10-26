@@ -523,6 +523,7 @@ class LeadFormProvider extends ChangeNotifier {
   /// is the same check against what the server holds now.
   String? get conversionBlockedReason => _conversionBlock(
         active: _active,
+        probability: _probablity,
         closedOn: _data['dateClosed'] is String ? _data['dateClosed'] : null,
         expectedClosing: _data['deadline'] is String ? _data['deadline'] : null,
       );
@@ -535,14 +536,23 @@ class LeadFormProvider extends ChangeNotifier {
   /// stamps that date when a lead is won or lost. A lead whose Expected
   /// Closing date is already behind it is refused as well; Odoo itself lets
   /// that through, but a lead that overdue should be re-dated, not converted.
+  ///
+  /// A lead at 100% is refused with Odoo's own message. Odoo's conversion
+  /// skips such a lead, and the wizard's check of it never runs when the lead
+  /// is handed to the wizard, so the app reported a success for a record that
+  /// stayed a lead.
   String? _conversionBlock({
     required bool? active,
+    required double? probability,
     required String? closedOn,
     required String? expectedClosing,
   }) {
     if (active == false) {
       return 'A lost or archived lead cannot be converted to an opportunity. '
           'Restore it first.';
+    }
+    if ((probability ?? 0.0) >= 100.0) {
+      return 'Closed/Dead leads cannot be converted into opportunities.';
     }
     final closed = DateTime.tryParse(closedOn ?? '');
     if (closedOn != null && closed != null && !closed.isAfter(DateTime.now())) {
@@ -583,7 +593,7 @@ class LeadFormProvider extends ChangeNotifier {
           ]
         ],
         'kwargs': {
-          'fields': ['active', 'date_closed', 'date_deadline'],
+          'fields': ['active', 'date_closed', 'date_deadline', 'probability'],
           'limit': 1,
         },
       });
@@ -594,6 +604,9 @@ class LeadFormProvider extends ChangeNotifier {
           row[field] is String ? row[field] as String : null;
       return _conversionBlock(
         active: row['active'] is bool ? row['active'] as bool : null,
+        probability: row['probability'] is num
+            ? (row['probability'] as num).toDouble()
+            : null,
         closedOn: text('date_closed'),
         expectedClosing: text('date_deadline'),
       );

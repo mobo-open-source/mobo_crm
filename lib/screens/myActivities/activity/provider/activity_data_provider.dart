@@ -262,6 +262,9 @@ class ActivityDataProvider extends ChangeNotifier {
       filters.add(['team_id', 'ilike', '%$searchText']);
     }
 
+    final prefs = await SharedPreferences.getInstance();
+    final int version = prefs.getInt('version') ?? 0;
+
     try {
       final countResponse = await CompanySessionManager.callKwWithCompany({
         'model': 'crm.lead',
@@ -316,7 +319,8 @@ class ActivityDataProvider extends ChangeNotifier {
             'date_closed',
             'message_bounce',
             'description',
-            'duplicate_lead_ids',
+            // Computed per lead; 19 fails the whole read for restricted users.
+            if (version < 19) 'duplicate_lead_ids',
             'active',
             'activity_user_id',
             'day_close',

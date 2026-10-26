@@ -328,6 +328,12 @@ class LeadDataProvider extends ChangeNotifier {
   /// filters and group-by belong to the user who chose them, so the next
   /// account must start from the plain list rather than inherit them.
   void clearAll() {
+    // A fetch still in flight belongs to the account being left; invalidating
+    // it keeps its rows, or its failure, out of the next account's list.
+    _fetchSeq++;
+    _isSearchPending = false;
+    hasError = false;
+    leadError = null;
     leads.clear();
     _groupedLeads.clear();
     _groupExpansionState.clear();
@@ -567,7 +573,9 @@ class LeadDataProvider extends ChangeNotifier {
         'date_closed',
         'message_bounce',
         'description',
-        'duplicate_lead_ids',
+        // Computed per lead; 19 checks read access on each duplicate while
+        // computing it and fails the whole read for restricted users.
+        if (version < 19) 'duplicate_lead_ids',
         'active',
         'activity_user_id',
         'day_close',
@@ -838,6 +846,9 @@ class LeadDataProvider extends ChangeNotifier {
               await ErrorHandler.handleException(e, uri: client!.baseURL);
           if (_leads.isEmpty) {
             Future.delayed(const Duration(seconds: 2), () {
+              // A retry, refresh or account switch inside the delay owns the
+              // flags now; this must not paint its error over the new result.
+              if (fetchSeq != _fetchSeq) return;
               _isLoading = false;
               hasError = true;
               notifyListeners();

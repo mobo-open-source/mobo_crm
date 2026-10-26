@@ -13,6 +13,7 @@ import '../../core/company/providers/company_provider.dart';
 import '../../core/company/session/company_session_manager.dart';
 import '../../core/security/secure_storage_service.dart';
 import '../../models/LoginPage/session_model.dart';
+import '../../services/auth_service.dart';
 import '../../services/storage_service.dart';
 import '../../utils/app_theme.dart';
 import '../settings/screens/profile/SwitchAccount/server_url_screen.dart';
@@ -318,6 +319,11 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
         companyId: user['companyId'],
         companyName: user['companyName'],
         isSystem: user['isSystem'] ?? false,
+        // The stored row carries only the full version string; without this
+        // saveSession writes 0, and every `version >= 18` branch then takes
+        // the pre-18 path on a 19 server.
+        version: AuthService()
+            .parseMajorVersion(user['serverVersion']?.toString() ?? ''),
       ));
 
       await storageService.saveLoginState(
@@ -325,6 +331,22 @@ class _ConfigurationScreenState extends State<ConfigurationScreen> {
         database: user['database'],
         url: user['url'],
       );
+
+      // saveLoginState only writes `selectedDatabase`. The client, the
+      // session refresh and the saved-password lookup all read `database`, so
+      // it kept naming the account being left: once the stored session id
+      // went stale (Odoo 19 rotates it every few hours) the re-login ran
+      // against the wrong database and the new account could load nothing.
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('database', user['database']?.toString() ?? '');
+
+      // The previous account's company selection is read back as this
+      // account's `allowed_company_ids` by every call until
+      // CompanyProvider.initialize() replaces it; Odoo refuses a context that
+      // names companies the user can't access.
+      await prefs.remove('selected_company_id');
+      await prefs.remove('selected_allowed_company_ids');
+      await prefs.remove('pending_company_id');
 
       // Point the client at the new account before loading anything.
       // CompanySessionManager.getCurrentSession() serves an in-memory cached

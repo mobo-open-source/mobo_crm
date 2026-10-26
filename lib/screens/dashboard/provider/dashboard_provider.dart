@@ -327,6 +327,9 @@ class DashboardProvider extends ChangeNotifier {
       );
     }
 
+    final prefs = await SharedPreferences.getInstance();
+    final int version = prefs.getInt('version') ?? 0;
+
     try {
       final forecastResponse = await CompanySessionManager.callKwWithCompany({
         'model': 'crm.lead',
@@ -371,7 +374,8 @@ class DashboardProvider extends ChangeNotifier {
             'date_closed',
             'message_bounce',
             'description',
-            'duplicate_lead_ids',
+            // Computed per lead; 19 fails the whole read for restricted users.
+            if (version < 19) 'duplicate_lead_ids',
             'active',
           ],
         },
