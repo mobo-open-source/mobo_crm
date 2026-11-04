@@ -114,12 +114,21 @@ class LeadDataProvider extends ChangeNotifier {
   List allleadpagination = [];
 
   GroupByOption _currentGroupBy = GroupByOption.none;
+
+  /// Every group, built from every lead the grouped fetch returned.
   Map<String, List<Map<dynamic, dynamic>>> _groupedLeads = {};
+
+  /// The slice of [_groupedLeads] the current page shows.
+  Map<String, List<Map<dynamic, dynamic>>> _visibleGroups = {};
   Map<String, bool> _groupExpansionState = {};
 
   GroupByOption get currentGroupBy => _currentGroupBy;
 
-  Map<String, List<Map<dynamic, dynamic>>> get groupedLeads => _groupedLeads;
+  bool get isGrouped => _currentGroupBy != GroupByOption.none;
+
+  /// The groups on the current page. A grouped fetch loads every lead, so the
+  /// pager pages through groups ([limit] per page) rather than through rows.
+  Map<String, List<Map<dynamic, dynamic>>> get groupedLeads => _visibleGroups;
 
   Map<String, bool> get groupExpansionState => _groupExpansionState;
   List<String> _selectedFilters = [];
@@ -137,33 +146,24 @@ class LeadDataProvider extends ChangeNotifier {
 
   bool get hasPreviousPage => _currentPage > 0;
 
-  bool get hasNextPage {
-    if (_currentGroupBy != GroupByOption.none) {
-      return (_currentPage + 1) * limit < _groupedLeads.keys.length;
-    }
-    return (_currentPage + 1) * limit < _totalCount;
-  }
+  /// What the pager counts: every lead the filters match for a flat list, or
+  /// the number of groups for a grouped one. This is the "/ total" shown next
+  /// to the range, so it must never be read from the groups of a flat list
+  /// (there are none, which printed "1-13 / 0").
+  int get pagerTotal => isGrouped ? _groupedLeads.length : _totalCount;
 
-  int get startRecord => (_currentPage * limit) + 1;
+  bool get hasNextPage => (_currentPage + 1) * limit < pagerTotal;
 
+  int get startRecord => pagerTotal == 0 ? 0 : (_currentPage * limit) + 1;
+
+  /// Derived from the page and the total rather than from how many rows are
+  /// loaded, so the range stays right while a page is still being fetched.
   int get endRecord {
-    if (_currentGroupBy != GroupByOption.none) {
-      final groupCount = _groupedLeads.keys.length;
-      final startGroup = _currentPage * limit;
-      final endGroup = ((startGroup + limit).clamp(0, groupCount));
-      return endGroup;
-    }
-    if (leads.isEmpty || _totalCount == 0) return 0;
-    final calculatedEnd = startRecord + leads.length - 1;
-    return calculatedEnd.clamp(1, _totalCount > 0 ? _totalCount : 1);
+    final pageEnd = (_currentPage + 1) * limit;
+    return pageEnd < pagerTotal ? pageEnd : pagerTotal;
   }
 
-  int get totalPages {
-    if (_currentGroupBy != GroupByOption.none) {
-      return (_groupedLeads.keys.length / limit).ceil();
-    }
-    return (_totalCount / limit).ceil();
-  }
+  int get totalPages => (pagerTotal / limit).ceil();
 
   int get currentPageNumber => _currentPage + 1;
 
@@ -187,12 +187,18 @@ class LeadDataProvider extends ChangeNotifier {
     selectedFilters = [];
     _leads.clear();
     _groupedLeads.clear();
+    _visibleGroups = {};
     _currentPage = 0;
 
     if (reload && context != null) {
       _isLoading = true;
       notifyListeners();
-      await getLeads(context: context, loading: true);
+      // Clearing the filters leaves a search the user typed in place.
+      await getLeads(
+        context: context,
+        loading: true,
+        searchText: searchController.text,
+      );
     }
   }
 
@@ -201,6 +207,17 @@ class LeadDataProvider extends ChangeNotifier {
     _currentGroupBy = option;
     _currentPage = 0;
     _applyGrouping();
+    notifyListeners();
+  }
+
+  /// Shows [page] of a grouped list.
+  ///
+  /// Every group is already in memory, so nothing is fetched; only the slice
+  /// of groups on screen changes.
+  void showGroupPage(int page) {
+    if (!isGrouped || page < 0 || page >= totalPages) return;
+    _currentPage = page;
+    _updateVisibleGroups();
     notifyListeners();
   }
 
@@ -309,7 +326,11 @@ class LeadDataProvider extends ChangeNotifier {
         'kwargs': {},
       });
 
-      leads.removeWhere((lead) => lead['id'] == id);
+      final before = _leads.length;
+      _leads.removeWhere((lead) => lead['id'] == id);
+      // The pager's total and the groups were built with this lead in them.
+      if (_leads.length < before && _totalCount > 0) _totalCount--;
+      _applyGrouping();
 
       notifyListeners();
       if (context.mounted) {
@@ -336,6 +357,7 @@ class LeadDataProvider extends ChangeNotifier {
     leadError = null;
     leads.clear();
     _groupedLeads.clear();
+    _visibleGroups = {};
     _groupExpansionState.clear();
     _currentPage = 0;
     _totalCount = 0;
@@ -386,8 +408,14 @@ class LeadDataProvider extends ChangeNotifier {
   /// [myactivities] - Filter by user's activities.
   /// [lost] - Include lost leads.
   /// [customFilter] - Provide custom domain filter.
-  /// [searchText] - Search text for lead name or team.
+  /// [searchText] - Matched against the lead name, customer, contact, email,
+  /// phone and sales team, across every record the filters allow (not just the
+  /// page on screen).
   /// [loading] - Show loading indicator.
+  /// [page] - Fetch this (0-based) page of the same query. Only the rows are
+  /// re-read; the graph aggregates stay as they are.
+  /// [resetPage] - The query changed (search, filters, company), so start from
+  /// the first page instead of an offset the new result may not reach.
   Future<void> getLeads(
       {BuildContext? context,
       bool leaddatefiltersclose = false,
@@ -413,27 +441,47 @@ class LeadDataProvider extends ChangeNotifier {
       bool activitycatgoryfilter = false,
       List? customFilter,
       bool loading = false,
-      String searchText = ""}) async {
+      String searchText = "",
+      int? page,
+      bool resetPage = false}) async {
     hasError = false;
     leadError = null;
+    searchText = searchText.trim();
+
+    // A fetch without a search means the list is not a search result, so the
+    // box must stop showing a query the list no longer reflects.
+    if (searchText.isEmpty && searchController.text.trim().isNotEmpty) {
+      searchController.clear();
+    }
 
     // The list on screen is the previous search's result, and the cache holds
     // neither it nor the active filters and grouping, so clearing a search
     // must refetch rather than reload the cache.
     final bool wasSearching = _lastSearchText.isNotEmpty;
-    if (searchText.isEmpty && customFilter == null && !wasSearching) {
+    if (searchText.isEmpty &&
+        customFilter == null &&
+        !wasSearching &&
+        page == null) {
       if (_leads.isNotEmpty && !loading) {
         _isSearchPending = false;
         notifyListeners();
         return;
       }
-      final success = await getLeadDataFromIsar();
-      if (success && !loading) {
+      // First open: put the offline copy up so the screen is not blank, but
+      // carry on to the server. The copy is only the last first page, so its
+      // length says nothing about how many leads there are; returning here
+      // left the pager reading "1-N / N" with no way to reach the rest.
+      if (_leads.isEmpty && !loading && await getLeadDataFromIsar()) {
         _isLoading = false;
         _isSearchPending = false;
         notifyListeners();
-        return;
       }
+    }
+
+    if (page != null) {
+      _currentPage = page < 0 ? 0 : page;
+    } else if (resetPage) {
+      _currentPage = 0;
     }
 
     _lastSearchText = searchText;
@@ -441,7 +489,16 @@ class LeadDataProvider extends ChangeNotifier {
     // result, or a slow earlier search lands over the cleared list.
     final int fetchSeq = ++_fetchSeq;
 
-    if (loading || _leads.isEmpty) {
+    if (loading) {
+      // An explicit reload shows the skeleton, not the rows of the old query.
+      _leads = [];
+      _applyGrouping();
+      _isLoading = true;
+      notifyListeners();
+    } else if (_leads.isEmpty && !_isSearchPending) {
+      // Not for a search: it already reads as busy through [isSearchPending],
+      // and [isLoading] locks the search box, which after a "no results" would
+      // freeze the field in the middle of the user's next keystroke.
       _isLoading = true;
       notifyListeners();
     }
@@ -455,8 +512,6 @@ class LeadDataProvider extends ChangeNotifier {
             Provider.of<OdooClientManager>(context, listen: false);
         client = clientprovider.client;
       }
-
-      _leads.clear();
 
       // What Odoo's Leads Analysis opens on: Active or Inactive (the two
       // filters share a group, so they are OR-ed) and no filter on type, so
@@ -507,17 +562,6 @@ class LeadDataProvider extends ChangeNotifier {
 
       filters = [...filters, ...mergeDateFilters];
 
-      // The analysis also opens on "Created on: this year", and Odoo drops
-      // that facet once another creation-date filter is picked. So do we.
-      if (!leaddatefilters) {
-        final (yearStart, yearEnd) = _currentYearBounds();
-        filters = [
-          ...filters,
-          ['create_date', '>=', yearStart],
-          ['create_date', '<', yearEnd],
-        ];
-      }
-
       List activityFilter = CustomFilters().getActivityFilters(
           activitycatgoryfilter: activitycatgoryfilter,
           lateactivity: lateactivity,
@@ -534,9 +578,21 @@ class LeadDataProvider extends ChangeNotifier {
       }
 
       if (searchText.isNotEmpty) {
-        filters.add('|');
-        filters.add(['name', 'ilike', '%$searchText']);
-        filters.add(['team_id', 'ilike', '%$searchText']);
+        filters.addAll(_searchDomain(searchText));
+      }
+
+      // The graph, unlike the list, opens on "Created on: this year" as Odoo's
+      // Leads Analysis does, and drops that facet once another creation-date
+      // filter is picked. The year bound used to sit on `filters`, so the list,
+      // its record count and its search all silently stopped at 1 January and
+      // every older lead was unreachable.
+      final List<dynamic> graphFilters = [...filters];
+      if (!leaddatefilters) {
+        final (yearStart, yearEnd) = _currentYearBounds();
+        graphFilters.addAll([
+          ['create_date', '>=', yearStart],
+          ['create_date', '<', yearEnd],
+        ]);
       }
 
       final prefs = await SharedPreferences.getInstance();
@@ -591,6 +647,7 @@ class LeadDataProvider extends ChangeNotifier {
         'type',
       ];
 
+      bool countKnown = false;
       try {
         final countResponse = await CompanySessionManager.callKwWithCompany({
           'model': 'crm.lead',
@@ -599,52 +656,64 @@ class LeadDataProvider extends ChangeNotifier {
           'kwargs': {},
         });
         _totalCount = countResponse ?? 0;
+        countKnown = countResponse != null;
       } catch (e) {
         debugPrint('[LeadDataProvider] search_count failed: $e');
         _totalCount = 0;
       }
 
-      int fetchLimit = limit;
-      int fetchOffset = _currentPage * limit;
+      // A grouped list loads every lead and pages through the groups instead.
+      final bool paged = _currentGroupBy == GroupByOption.none;
 
-      if (_currentGroupBy != GroupByOption.none) {
-        fetchLimit = 0;
-        fetchOffset = 0;
+      // A page past the end would come back empty and read as "nothing found":
+      // the search or filters narrowed the result, or leads were deleted since
+      // the page was last shown. Land on the last page that exists.
+      if (paged && countKnown) {
+        final int lastPage = _totalCount > 0 ? (_totalCount - 1) ~/ limit : 0;
+        if (_currentPage > lastPage) _currentPage = lastPage;
       }
+
+      final int fetchLimit = paged ? limit : 0;
+      final int fetchOffset = paged ? _currentPage * limit : 0;
+
+      Future<dynamic> readLeads() => CompanySessionManager.callKwWithCompany({
+            'model': 'crm.lead',
+            'method': 'search_read',
+            'args': [filters],
+            'kwargs': {
+              'fields': fieldsToFetch,
+              if (paged) 'limit': fetchLimit,
+              if (paged) 'offset': fetchOffset,
+            },
+          });
 
       dynamic leadDetailsraw;
       try {
-        leadDetailsraw = await CompanySessionManager.callKwWithCompany({
-          'model': 'crm.lead',
-          'method': 'search_read',
-          'args': [filters],
-          'kwargs': {
-            'fields': fieldsToFetch,
-            'limit': fetchLimit,
-            'offset': fetchOffset,
-          },
-        });
+        leadDetailsraw = await readLeads();
       } catch (e) {
         fieldsToFetch.remove('mobile');
-        leadDetailsraw = await CompanySessionManager.callKwWithCompany({
-          'model': 'crm.lead',
-          'method': 'search_read',
-          'args': [filters],
-          'kwargs': {
-            'fields': fieldsToFetch,
-            'limit': fetchLimit,
-            'offset': fetchOffset,
-          },
-        });
+        leadDetailsraw = await readLeads();
       }
 
       // A newer search/clear has started since this request went out.
       if (fetchSeq != _fetchSeq) return;
 
-      // The cache is the offline copy of the full list, so it never holds
-      // search results. Best-effort: a record it can't store must not abort
-      // showing the fetched list.
-      if (searchText.isEmpty &&
+      // The cache is the offline copy of the plain first page, so it never
+      // holds search results, a filtered list or a later page: reopening the
+      // app would otherwise start on whichever of those was fetched last.
+      // Best-effort: a record it can't store must not abort showing the
+      // fetched list.
+      final bool isPlainFirstPage = paged &&
+          fetchOffset == 0 &&
+          searchText.isEmpty &&
+          customFilter == null &&
+          !(leadfilter ||
+              leaddatefilters ||
+              leaddatefiltersclose ||
+              stagefilters ||
+              activitycatgoryfilter ||
+              hasArchived);
+      if (isPlainFirstPage &&
           leadDetailsraw != null &&
           leadDetailsraw.isNotEmpty) {
         try {
@@ -657,38 +726,46 @@ class LeadDataProvider extends ChangeNotifier {
         } catch (_) {}
       }
 
-      // The graph counts every record the filters match, so a list that runs
-      // to more than one page must not shrink it to the page on screen. A page
-      // that is full, or isn't the first, may be only part of the result.
-      dynamic graphRaw = leadDetailsraw;
-      if (leadDetailsraw is List &&
-          fetchLimit > 0 &&
-          (fetchOffset > 0 || leadDetailsraw.length >= fetchLimit)) {
-        try {
-          graphRaw = await CompanySessionManager.callKwWithCompany({
-            'model': 'crm.lead',
-            'method': 'search_read',
-            'args': [filters],
-            'kwargs': {
-              'fields': [
-                'create_date',
-                'stage_id',
-                'day_close',
-                'expected_revenue',
-                'recurring_revenue_monthly',
-                'probability',
-                'recurring_revenue_monthly_prorated',
-                'recurring_revenue_prorated',
-                'prorated_revenue',
-                'recurring_revenue',
-              ],
-            },
-          });
-        } catch (e) {
-          // The page is still a fair picture; better than no graph.
-          debugPrint('[LeadDataProvider] graph fetch failed: $e');
+      // The graph counts every record [graphFilters] match, so it must not be
+      // shrunk to the page on screen, and it is not the same set as the list
+      // whenever the year bound applies. The list rows can stand in for it
+      // only when no year bound was added and they are the whole result.
+      // A page flip keeps the query, so the aggregates already on hand are
+      // still right and are left alone.
+      dynamic graphRaw;
+      if (page == null) {
+        graphRaw = leadDetailsraw;
+        final bool listIsWholeResult = leaddatefilters &&
+            leadDetailsraw is List &&
+            (fetchLimit == 0 ||
+                (fetchOffset == 0 && leadDetailsraw.length < fetchLimit));
+        if (!listIsWholeResult) {
+          try {
+            graphRaw = await CompanySessionManager.callKwWithCompany({
+              'model': 'crm.lead',
+              'method': 'search_read',
+              'args': [graphFilters],
+              'kwargs': {
+                'fields': [
+                  'create_date',
+                  'stage_id',
+                  'day_close',
+                  'expected_revenue',
+                  'recurring_revenue_monthly',
+                  'probability',
+                  'recurring_revenue_monthly_prorated',
+                  'recurring_revenue_prorated',
+                  'prorated_revenue',
+                  'recurring_revenue',
+                ],
+              },
+            });
+          } catch (e) {
+            // The page is still a fair picture; better than no graph.
+            debugPrint('[LeadDataProvider] graph fetch failed: $e');
+          }
+          if (fetchSeq != _fetchSeq) return;
         }
-        if (fetchSeq != _fetchSeq) return;
       }
 
       if (graphRaw != null && graphRaw.isNotEmpty) {
@@ -771,20 +848,30 @@ class LeadDataProvider extends ChangeNotifier {
 
         notifyListeners();
       } else {}
-      final activityResponse = await CompanySessionManager.callKwWithCompany({
-        'model': 'mail.activity.type',
-        'method': 'search_read',
-        'args': [],
-        'kwargs': {
-          'fields': ['name']
+
+      // The activity types do not change with the page. Reading them is a side
+      // errand: a failure here must not throw away the leads already fetched.
+      if (page == null) {
+        try {
+          final activityResponse =
+              await CompanySessionManager.callKwWithCompany({
+            'model': 'mail.activity.type',
+            'method': 'search_read',
+            'args': [],
+            'kwargs': {
+              'fields': ['name']
+            }
+          });
+          if (activityResponse is List) {
+            activityNames = activityResponse
+                .whereType<Map<String, dynamic>>()
+                .map((activity) => activity['name'].toString())
+                .toList();
+            await IsarService.saveActivityNames(activityNames);
+          }
+        } catch (e) {
+          debugPrint('[LeadDataProvider] activity types failed: $e');
         }
-      });
-      if (activityResponse is List) {
-        activityNames = activityResponse
-            .whereType<Map<String, dynamic>>()
-            .map((activity) => activity['name'].toString())
-            .toList();
-        await IsarService.saveActivityNames(activityNames);
       }
 
       if (fetchSeq != _fetchSeq) return;
@@ -815,8 +902,10 @@ class LeadDataProvider extends ChangeNotifier {
           _isLoading = false;
           notifyListeners();
         } else {
-          // Regroup the now-empty list too, or the grouped view keeps the
-          // previous result's groups.
+          // The previous rows are no longer cleared up front, so an empty
+          // result has to replace them. Regroup too, or the grouped view
+          // keeps the previous result's groups.
+          _leads = [];
           _applyGrouping();
           _isLoading = false;
           notifyListeners();
@@ -832,7 +921,9 @@ class LeadDataProvider extends ChangeNotifier {
         notifyListeners();
       }
       if (selectedFilters.isEmpty) {
-        if (success == false) {
+        // Rows on screen (the offline copy, or the list a failed search left
+        // in place) mean there is something to show, so no error screen.
+        if (success == false && _leads.isEmpty) {
           OdooClient? client;
           if (clientraw != null) {
             client = clientraw;
@@ -870,9 +961,48 @@ class LeadDataProvider extends ChangeNotifier {
     }
   }
 
+  /// The Odoo domain a search term expands to: a lead matches when the term
+  /// appears in any field the list shows or the hint promises (name or
+  /// customer), plus the sales team. The fields are OR-ed, so the domain needs
+  /// one `|` for every field but the first.
+  ///
+  /// The term is passed as typed: `ilike` already wraps it in wildcards, and a
+  /// leading `%` of our own would be taken literally by servers that escape it.
+  List<dynamic> _searchDomain(String term) {
+    const fields = [
+      'name',
+      'partner_id',
+      'partner_name',
+      'contact_name',
+      'email_from',
+      'phone',
+      'team_id',
+    ];
+    return [
+      for (var i = 1; i < fields.length; i++) '|',
+      for (final field in fields) [field, 'ilike', term],
+    ];
+  }
+
+  /// Slices [_groupedLeads] down to the groups of the current page.
+  void _updateVisibleGroups() {
+    if (!isGrouped || _groupedLeads.isEmpty) {
+      _visibleGroups = {};
+      return;
+    }
+    final int lastPage = (_groupedLeads.length - 1) ~/ limit;
+    if (_currentPage > lastPage) _currentPage = lastPage;
+    _visibleGroups = {
+      for (final key
+          in _groupedLeads.keys.skip(_currentPage * limit).take(limit))
+        key: _groupedLeads[key]!,
+    };
+  }
+
   void _applyGrouping() {
     _groupedLeads.clear();
     if (_currentGroupBy == GroupByOption.none) {
+      _visibleGroups = {};
       return;
     }
 
@@ -893,6 +1023,7 @@ class LeadDataProvider extends ChangeNotifier {
       sortedGroups[key] = _groupedLeads[key]!;
     }
     _groupedLeads = sortedGroups;
+    _updateVisibleGroups();
   }
 
   String _getGroupKey(Map<dynamic, dynamic> lead, GroupByOption groupBy) {
@@ -1049,6 +1180,8 @@ class LeadDataProvider extends ChangeNotifier {
       if (_leads.isNotEmpty && _totalCount == 0) {
         _totalCount = _leads.length;
       }
+      // The copy holds the first page only, whatever page was on screen.
+      if (_leads.isNotEmpty) _currentPage = 0;
       _applyGrouping();
       notifyListeners();
 
@@ -1089,9 +1222,13 @@ class LeadDataProvider extends ChangeNotifier {
   }) async {
     if (!hasNextPage || _isLoading) return;
 
-    _currentPage++;
+    if (isGrouped) {
+      showGroupPage(_currentPage + 1);
+      return;
+    }
 
     await getLeads(
+      page: _currentPage + 1,
       context: context,
       leadfilter: leadfilter,
       leaddatefilters: leaddatefilters,
@@ -1145,9 +1282,13 @@ class LeadDataProvider extends ChangeNotifier {
   }) async {
     if (!hasPreviousPage || _isLoading) return;
 
-    _currentPage--;
+    if (isGrouped) {
+      showGroupPage(_currentPage - 1);
+      return;
+    }
 
     await getLeads(
+      page: _currentPage - 1,
       context: context,
       leadfilter: leadfilter,
       leaddatefilters: leaddatefilters,

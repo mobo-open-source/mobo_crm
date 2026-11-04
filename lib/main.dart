@@ -164,7 +164,8 @@ class MyApp extends StatelessWidget {
         // Tapping anywhere that isn't a field or a button puts the keyboard
         // away, on every screen, dialog and sheet. Translucent so it also
         // sees taps on empty space; a text field or button underneath still
-        // wins the tap, so typing and pressing are unaffected.
+        // wins the tap, so typing and pressing are unaffected.Open with his setup (5 minutes): which modules, who uses the standard mobile version and what they find lacking, how many users and locations.
+
         return GestureDetector(
           behavior: HitTestBehavior.translucent,
           onTap: () => FocusManager.instance.primaryFocus?.unfocus(),

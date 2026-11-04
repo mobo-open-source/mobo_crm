@@ -416,31 +416,8 @@ class LeadMainScreenState extends State<LeadMainScreen> {
           } else {
             leadDataProvider.selectedFilters = activeFilters;
 
-            leadDataProvider.getLeads(
-              hasArchived: filterArchived,
-              searchText: leadDataProvider.searchController.text,
-              loading: true,
-              leadbeforeMonthclose: filterPreviousMonthClose,
-              leadbeforetwoMonthclose: filterTwoMonthsAgoClose,
-              leaddatefiltersclose: hasClosingDateFilters,
-              leadmonthNowclose: filterCurrentMonthClose,
-              stagefilters: hasStageFilters,
-              lost: filterLost,
-              partnerassigned: filterPartnerAssigned,
-              unAssigned: filterUnassigned,
-              leadfilter: hasLeadFilters,
-              context: context,
-              leadbeforeMonth: filterPreviousMonth,
-              leadmonthNow: filterCurrentMonth,
-              leaddatefilters: hasCreationDateFilters,
-              leadbeforetwoMonth: filterTwoMonthsAgo,
-              lateactivity: filterLateActivities,
-              todayactivity: filterTodayActivities,
-              futureactivity: filterFutureActivities,
-              activitycatgoryfilter: hasActivityCategoryFilters,
-              myactivities: filterMyActivities,
-              customFilter: hasCustomFilters ? customFilters : null,
-            );
+            // New filters mean a new result set: start from its first page.
+            _fetchLeads(resetPage: true);
           }
         },
       ),
@@ -543,9 +520,8 @@ class LeadMainScreenState extends State<LeadMainScreen> {
       if (!mounted) return;
       await context.read<CompanyProvider>().initialize();
       if (!mounted) return;
-      final leadprovider =
-          Provider.of<LeadDataProvider>(context, listen: false);
-      leadprovider.initlead(context, loading: true);
+      // Another company's leads: its page 3 may not exist.
+      _fetchLeads(resetPage: true);
     });
   }
 
@@ -565,12 +541,36 @@ class LeadMainScreenState extends State<LeadMainScreen> {
   /// Used by:
   /// - Pull-to-refresh
   /// - View widgets (List, Kanban, Calendar, etc.)
-  Future<void> _refreshLeads() async {
+  Future<void> _refreshLeads() => _fetchLeads();
+
+  /// Fetches leads with everything the screen currently has applied: the
+  /// search text, every filter and the custom filter domain.
+  ///
+  /// The single place those are gathered, so that search, paging, refresh and
+  /// filter changes all ask the server the same question. Search and paging
+  /// used to build their own argument lists and left out the custom filters
+  /// (and, for search, the archived flag), so a result silently widened as soon
+  /// as the user typed or turned a page.
+  ///
+  /// - [resetPage]: the query changed, start from the first page.
+  /// - [page]: show this (0-based) page of the same query.
+  /// - [loading]: show the skeleton instead of keeping the rows on screen.
+  /// - [searchText]: overrides the search box, for a clear that races the
+  ///   controller.
+  Future<void> _fetchLeads({
+    bool loading = true,
+    bool resetPage = false,
+    int? page,
+    String? searchText,
+  }) async {
+    if (!mounted) return;
     final leadProvider = Provider.of<LeadDataProvider>(context, listen: false);
     await leadProvider.getLeads(
       context: context,
-      loading: true,
-      searchText: leadProvider.searchController.text,
+      loading: loading,
+      resetPage: resetPage,
+      page: page,
+      searchText: searchText ?? leadProvider.searchController.text,
       unAssigned: filterUnassigned,
       partnerassigned: filterPartnerAssigned,
       myactivities: filterMyActivities,
@@ -1201,56 +1201,25 @@ class LeadMainScreenState extends State<LeadMainScreen> {
                   // debounce window shows the skeleton instead of an empty
                   // list that reads as "nothing found".
                   provider.markSearchPending();
-                  if (query.isNotEmpty) {
-                    if (_debounce?.isActive ?? false) _debounce!.cancel();
+                  _debounce?.cancel();
+
+                  // A new search starts from page 1: from page 3 its few
+                  // results would sit at an offset that is past their end.
+                  // Only the text is trimmed, so "  " counts as cleared.
+                  if (query.trim().isNotEmpty) {
                     _debounce = Timer(const Duration(milliseconds: 300), () {
-                      provider.getLeads(
-                          loading: false,
-                          searchText: provider.searchController.text,
-                          leadbeforeMonthclose: filterPreviousMonthClose,
-                          leadbeforetwoMonthclose: filterTwoMonthsAgoClose,
-                          leaddatefiltersclose: hasClosingDateFilters,
-                          leadmonthNowclose: filterCurrentMonthClose,
-                          stagefilters: hasStageFilters,
-                          lost: filterLost,
-                          partnerassigned: filterPartnerAssigned,
-                          unAssigned: filterUnassigned,
-                          leadfilter: hasLeadFilters,
-                          context: context,
-                          leadbeforeMonth: filterPreviousMonth,
-                          leadmonthNow: filterCurrentMonth,
-                          leaddatefilters: hasCreationDateFilters,
-                          leadbeforetwoMonth: filterTwoMonthsAgo,
-                          lateactivity: filterLateActivities,
-                          todayactivity: filterTodayActivities,
-                          futureactivity: filterFutureActivities,
-                          activitycatgoryfilter: hasActivityCategoryFilters,
-                          myactivities: filterMyActivities);
+                      _fetchLeads(
+                        loading: false,
+                        resetPage: true,
+                        searchText: provider.searchController.text.trim(),
+                      );
                     });
                   } else {
-                    if (_debounce?.isActive ?? false) _debounce!.cancel();
-                    provider.getLeads(
-                        loading: false,
-                        searchText: '',
-                        leadbeforeMonthclose: filterPreviousMonthClose,
-                        leadbeforetwoMonthclose: filterTwoMonthsAgoClose,
-                        leaddatefiltersclose: hasClosingDateFilters,
-                        leadmonthNowclose: filterCurrentMonthClose,
-                        stagefilters: hasStageFilters,
-                        lost: filterLost,
-                        partnerassigned: filterPartnerAssigned,
-                        unAssigned: filterUnassigned,
-                        leadfilter: hasLeadFilters,
-                        context: context,
-                        leadbeforeMonth: filterPreviousMonth,
-                        leadmonthNow: filterCurrentMonth,
-                        leaddatefilters: hasCreationDateFilters,
-                        leadbeforetwoMonth: filterTwoMonthsAgo,
-                        lateactivity: filterLateActivities,
-                        todayactivity: filterTodayActivities,
-                        futureactivity: filterFutureActivities,
-                        activitycatgoryfilter: hasActivityCategoryFilters,
-                        myactivities: filterMyActivities);
+                    _fetchLeads(
+                      loading: false,
+                      resetPage: true,
+                      searchText: '',
+                    );
                   }
                 },
               ),
@@ -1395,7 +1364,7 @@ class LeadMainScreenState extends State<LeadMainScreen> {
                       width: 1),
                 ),
                 child: Text(
-                  "${provider.startRecord}-${provider.endRecord} / ${provider.groupedLeads.keys.length}",
+                  "${provider.startRecord}-${provider.endRecord} / ${provider.pagerTotal}",
                   style: TextStyle(
                       fontSize: 13,
                       color: isDark ? Colors.white : Colors.black87),
@@ -1445,18 +1414,29 @@ class LeadMainScreenState extends State<LeadMainScreen> {
   /// Navigates to the previous page of leads.
   void _goToPreviousPage(
       LeadDataProvider provider, OdooClientManager odooInitProvider) {
-    provider.goToPreviousPage(
-      context: context,
-      searchText: provider.searchController.text,
-    );
+    _changePage(provider, -1);
   }
 
   /// Navigates to the next page of leads.
   void _goToNextPage(
       LeadDataProvider provider, OdooClientManager odooInitProvider) {
-    provider.goToNextPage(
-      context: context,
-      searchText: provider.searchController.text,
-    );
+    _changePage(provider, 1);
+  }
+
+  /// Moves [delta] pages. A grouped list already holds every group, so it only
+  /// changes the groups shown; a flat list fetches that page through
+  /// [_fetchLeads], so the page keeps the filters, archived flag and custom
+  /// filters of page 1 (the provider's own `goToNextPage` was handed only the
+  /// search text and fetched later pages unfiltered).
+  void _changePage(LeadDataProvider provider, int delta) {
+    if (provider.isLoading) return;
+    final int target = provider.currentPage + delta;
+    if (target < 0 || target >= provider.totalPages) return;
+
+    if (provider.isGrouped) {
+      provider.showGroupPage(target);
+    } else {
+      _fetchLeads(page: target);
+    }
   }
 }

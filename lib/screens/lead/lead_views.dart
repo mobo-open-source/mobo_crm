@@ -618,26 +618,6 @@ class _LeadListViewState extends State<LeadListView> {
     super.dispose();
   }
 
-  /// Filters leads locally based on search text.
-  ///
-  /// Matches against:
-  /// - Lead name
-  /// - Customer/partner name
-  List<Map<dynamic, dynamic>> _getFilteredLeads(
-      List<Map<dynamic, dynamic>> leads) {
-    final provider = Provider.of<LeadDataProvider>(context, listen: false);
-    final searchText = provider.searchController.text.trim().toLowerCase();
-
-    if (searchText.isEmpty) return leads;
-
-    return leads.where((lead) {
-      final name = lead['name']?.toString().toLowerCase() ?? '';
-      final partner = lead['partner_name']?.toString().toLowerCase() ?? '';
-
-      return name.contains(searchText) || partner.contains(searchText);
-    }).toList();
-  }
-
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -648,10 +628,21 @@ class _LeadListViewState extends State<LeadListView> {
       child: Consumer3<LeadDataProvider, LeadFormProvider, OdooClientManager>(
         builder:
             (context, provider, leadformprovider, odooclientprovider, child) {
+          // The server does the searching, across every record the filters
+          // allow. The rows are shown as returned: re-filtering this page here
+          // (by name and partner only) threw away leads the server had matched
+          // on their email, phone, contact or sales team.
+          //
+          // A pending search shows the skeleton, not the previous rows, which
+          // would read as the unfiltered answer to the text already typed.
+          final bool searching =
+              provider.searchController.text.trim().isNotEmpty;
+
           Widget content = Column(
             children: [
               Expanded(
-                child: provider.isBusy && provider.leads.isEmpty
+                child: (provider.isBusy && provider.leads.isEmpty) ||
+                        provider.isSearchPending
                     ? _buildShimmerList()
                     : provider.leadError != null
                         ? ErrorScreen(
@@ -661,22 +652,12 @@ class _LeadListViewState extends State<LeadListView> {
                                   context: context, loading: true);
                             },
                           )
-                        : provider.isBusy == false && provider.leads.isEmpty
-                            ? _buildEmptyState(context, provider)
-                            : () {
-                                final filteredLeads =
-                                    _getFilteredLeads(provider.leads);
-                                final searchText =
-                                    provider.searchController.text.trim();
-
-                                if (filteredLeads.isEmpty &&
-                                    searchText.isNotEmpty) {
-                                  return _buildNoSearchResults(isDark);
-                                }
-
-                                return _buildLeadsList(
-                                    filteredLeads, leadformprovider, provider);
-                              }(),
+                        : provider.leads.isEmpty
+                            ? (searching
+                                ? _buildNoSearchResults(isDark)
+                                : _buildEmptyState(context, provider))
+                            : _buildLeadsList(
+                                provider.leads, leadformprovider, provider),
               ),
             ],
           );

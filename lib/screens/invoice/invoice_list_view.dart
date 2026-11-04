@@ -213,11 +213,25 @@ class _InvoiceListScreenState extends State<InvoiceListScreen> {
     );
   }
 
+  /// The number Odoo gave the invoice (e.g. `INV/2026/00012`).
+  ///
+  /// A draft has none yet: Odoo stores `/` (or nothing) until it is posted, and
+  /// shows such a record as "Draft", so the card does too rather than a bare
+  /// slash.
+  String _invoiceNumber(Map<String, dynamic> invoice) {
+    final name = invoice['name'];
+    if (name is String && name.trim().isNotEmpty && name.trim() != '/') {
+      return name.trim();
+    }
+    return invoice['state'] == 'draft' ? 'Draft' : 'N/A';
+  }
+
   /// Builds a styled invoice summary card.
   ///
   /// Displays:
   /// - Partner name
   /// - Invoice state badge
+  /// - Invoice number
   /// - Due date
   /// - Total amount
   /// - Untaxed amount
@@ -271,6 +285,32 @@ class _InvoiceListScreenState extends State<InvoiceListScreen> {
                 ],
               ),
               const SizedBox(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Invoice Number',
+                    style: TextStyle(
+                      color: isDark ? Colors.grey[400] : Colors.grey[600],
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Flexible(
+                    child: Text(
+                      _invoiceNumber(invoice),
+                      style: TextStyle(
+                        color: isDark ? Colors.white : Colors.black,
+                        fontWeight: FontWeight.normal,
+                        fontSize: 14,
+                      ),
+                      textAlign: TextAlign.end,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 5),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [

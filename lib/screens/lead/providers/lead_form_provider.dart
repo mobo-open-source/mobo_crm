@@ -1414,6 +1414,20 @@ class LeadFormProvider extends ChangeNotifier {
         if (assignmentDate != _data['dateOpen']) 'date_open': assignmentDate,
         if (closingDate != _data['dateClosed']) 'date_closed': closingDate,
       };
+      final closingEdited = dateValues.containsKey('date_closed');
+      final pickedClosing = closingDate;
+
+      // The same rule bites on every save, not only when a date is picked:
+      // `probability` and `active` were sent with their current values each
+      // time, and Odoo rewrites `date_closed` for the mere presence of them
+      // (probability > 0 clears it, 100 or an archived record stamps now). A
+      // Closing Date saved earlier was therefore wiped by the next save that
+      // changed anything else, and the "unchanged" check above never restored
+      // it. Neither field can be edited here without a call of its own (the
+      // won/lost/restore actions write them directly), so they are sent only
+      // when the user really changed the probability, and `active` not at all.
+      final newProbability = double.tryParse(probablityController.text) ?? 0.0;
+      final probabilityEdited = newProbability != (_probablity ?? 0.0);
 
       final dynamic response = await CompanySessionManager.callKwWithCompany({
         'model': 'crm.lead',
@@ -1429,8 +1443,7 @@ class LeadFormProvider extends ChangeNotifier {
             'email_from': emailController.text,
             'contact_name': contactNameController.text,
             'description': descriptionController.text,
-            'probability': double.tryParse(probablityController.text) ?? 0.0,
-            'active': _active,
+            if (probabilityEdited) 'probability': newProbability,
             'tag_ids': selectedTagIds,
             'date_deadline': expectedClosing,
             'function': jobPositionController.text,
@@ -1490,7 +1503,16 @@ class LeadFormProvider extends ChangeNotifier {
       _formEdited = false;
       await fetchStatus(client, lead);
       if (context.mounted) {
-        CustomSnackbar.showSuccess(context, 'Changes saved successfully');
+        // fetchStatus reloaded what the server holds. If it is not the day the
+        // user picked, say so instead of reporting a plain success.
+        String? day(String? value) =>
+            value == null || value.length < 10 ? null : value.substring(0, 10);
+        if (closingEdited && day(closingDate) != day(pickedClosing)) {
+          CustomSnackbar.showWarning(context,
+              'The changes were saved, but the server did not keep the Closing Date.');
+        } else {
+          CustomSnackbar.showSuccess(context, 'Changes saved successfully');
+        }
       }
       return true;
     } catch (e, stack) {
