@@ -121,21 +121,24 @@ class MailActivityIsar {
 
    /// Converts the [MailActivityIsar] instance to JSON format.
    ///
-   /// Nested fields like `activity_type_id` and `user_id` are converted back to list format
-   /// if available; otherwise, defaults to `'N/A'`.
+   /// Mirrors the shape Odoo itself returns: nested fields like
+   /// `activity_type_id` and `user_id` become `[id, name]` lists and anything
+   /// that is not set becomes `false` (never a placeholder string, so offline
+   /// rows cannot show text such as "N/A" as if it were real data).
   Map<String, dynamic> toJson() {
     return {
       'id': activityId,
-      'summary': summary ?? 'N/A',
-      'note': note ?? 'N/A',
-      'date_deadline': dateDeadline ?? 'N/A',
+      'summary': summary ?? false,
+      'note': note ?? false,
+      'date_deadline': dateDeadline ?? false,
       'activity_type_id': activityTypeId != null && activityTypeName != null
-          ? [int.parse(activityTypeId!), activityTypeName]
-          : 'N/A',
-      'res_name': resName ?? 'N/A',
-      'user_id': userId != null && userName != null ? [userId, userName] : 'N/A',
-      'res_model': resModel ?? 'N/A',
-      'res_id': resId ?? 'N/A',
+          ? [int.tryParse(activityTypeId!) ?? 0, activityTypeName]
+          : false,
+      'res_name': resName ?? false,
+      'user_id':
+          userId != null && userName != null ? [userId, userName] : false,
+      'res_model': resModel ?? false,
+      'res_id': resId ?? false,
       'group_id': groupId,
     };
   }

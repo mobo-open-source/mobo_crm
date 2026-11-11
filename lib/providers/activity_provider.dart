@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:mobo_crm/models/activity_model/activity_model.dart';
 import 'package:mobo_crm/services/activity_service.dart';
+import 'package:mobo_crm/utils/odoo_failure.dart';
 import 'package:odoo_rpc/odoo_rpc.dart';
 
 /// Provider class responsible for managing Activity state
@@ -91,7 +92,7 @@ class ActivityProvider extends ChangeNotifier {
       _isLoading = false;
       notifyListeners();
     } catch (e) {
-      _error = 'Failed to load activities: ${e.toString()}';
+      _error = describeOdooFailure(e, action: 'view these activities').headline;
       _isLoading = false;
       notifyListeners();
     }
@@ -136,7 +137,7 @@ class ActivityProvider extends ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      _error = 'Failed to create activity: ${e.toString()}';
+      _error = describeOdooFailure(e, action: 'create this activity').headline;
       _isCreating = false;
       notifyListeners();
       return false;
@@ -167,7 +168,8 @@ class ActivityProvider extends ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      _error = 'Failed to mark activity as done: ${e.toString()}';
+      _error =
+          describeOdooFailure(e, action: 'mark this activity as done').headline;
       _isUpdating = false;
       notifyListeners();
       return false;
@@ -203,7 +205,7 @@ class ActivityProvider extends ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      _error = 'Failed to update activity: ${e.toString()}';
+      _error = describeOdooFailure(e, action: 'update this activity').headline;
       _isUpdating = false;
       notifyListeners();
       return false;
@@ -235,7 +237,7 @@ class ActivityProvider extends ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      _error = 'Failed to delete activity: ${e.toString()}';
+      _error = describeOdooFailure(e, action: 'delete this activity').headline;
       _isUpdating = false;
       notifyListeners();
       return false;

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, TargetPlatform;
 import 'package:in_app_review/in_app_review.dart';
 import 'package:mobo_crm/Rating/rating_dialog.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -18,8 +19,8 @@ import '../core/navigation/global_keys.dart';
 /// - Prevents repeated prompts within the same app session.
 /// - Supports postponing review requests.
 /// - Allows users to permanently disable review prompts.
-/// - Falls back to opening the store listing if native review
-///   dialog quotas prevent showing the in-app review.
+/// - Sends users who rate the app well to its own store page: the App Store
+///   on iOS, Google Play on Android.
 /// - Sends email feedback for low ratings (1–3 stars).
 ///
 /// Review Flow:
@@ -27,7 +28,7 @@ import '../core/navigation/global_keys.dart';
 /// 2. [checkAndShowRating] evaluates whether conditions are met.
 /// 3. If eligible, a [CustomRatingDialog] is displayed.
 /// 4. Based on rating:
-///     • High rating (≥4): triggers native store review.
+///     • High rating (≥4): opens the store page (see [openStoreListing]).
 ///     • Low rating (<4): sends feedback email and postpones review.
 ///
 /// Persistent state is stored using SharedPreferences.
@@ -47,6 +48,27 @@ class ReviewService {
   static const int _thresholdOpens = 5;
   static const int _thresholdEvents = 5;
   static const int _thresholdDays = 5;
+
+  /// App Store id of the iOS app (apps.apple.com/…/id6756002668).
+  static const String _appStoreId = '6756002668';
+
+  /// The App Store page of the app, opened on its "write a review" screen.
+  ///
+  /// The path carries no country code on purpose: the App Store app resolves
+  /// it to the user's own storefront, so it works outside India too.
+  static final Uri _appStoreReviewUri = Uri.parse(
+    'https://apps.apple.com/app/id$_appStoreId?action=write-review',
+  );
+
+  /// The Google Play page of the app (package `com.cybrosys.mobo_crm`).
+  static final Uri _playStoreUri = Uri.parse(
+    'https://play.google.com/store/apps/details?id=com.cybrosys.mobo_crm',
+  );
+
+  bool get _isIOS => defaultTargetPlatform == TargetPlatform.iOS;
+
+  /// Name of the store the user is sent to on this device.
+  String get _storeName => _isIOS ? 'App Store' : 'Google Play';
 
   bool _wasRequestedThisRun = false;
 
@@ -134,37 +156,73 @@ class ReviewService {
     await _checkAndRequestReview(prefs, context);
   }
 
-  /// Force a review request. If the native dialog is suppressed by Google Play
-  /// (due to quotas), it will fall back to opening the Store Listing directly.
+  /// Takes a user who rated the app well to its store page, to leave a review:
+  /// the App Store on iOS, Google Play on Android.
+  ///
+  /// The store page is opened directly rather than asking the system for an
+  /// in-app review sheet. That sheet is rationed by the OS (it is simply not
+  /// shown once the quota is used, and never in TestFlight), and a request
+  /// that is not shown reports no error, so the user was left with nothing but
+  /// a "requesting review" message.
   Future<void> forceRequestReview() async {
     await postponeReview(const Duration(days: 30));
+    _wasRequestedThisRun = true;
 
-    scaffoldMessengerKey.currentState?.showSnackBar(
+    final messenger = scaffoldMessengerKey.currentState;
+    messenger?.showSnackBar(
       SnackBar(
-        content: const Text('Requesting Google Play review...'),
+        content: Text('Opening the $_storeName...'),
         duration: const Duration(seconds: 2),
         backgroundColor: Colors.blue[700],
       ),
     );
 
-    try {
-      if (await _inAppReview.isAvailable()) {
-        _wasRequestedThisRun = true;
-        await Future.delayed(const Duration(milliseconds: 2500));
-        await _inAppReview.requestReview();
-      } else {
-        await openStoreListing();
-      }
-    } catch (e) {
-      await openStoreListing();
+    final opened = await openStoreListing();
+    if (!opened) {
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text(
+            "Couldn't open the $_storeName. "
+            'Please search for "Mobo CRM for Odoo" there.',
+          ),
+          duration: const Duration(seconds: 4),
+          backgroundColor: Colors.red[700],
+        ),
+      );
     }
   }
 
-  /// Opens the store listing directly. Use this as a fallback or for a "Rate Us" button.
-  Future<void> openStoreListing() async {
+  /// Opens this app's page in the store of the current platform: the App Store
+  /// (on its "write a review" screen) on iOS, Google Play on Android.
+  ///
+  /// Returns whether a store page could be opened. Use it for the review flow
+  /// or for a "Rate Us" button.
+  Future<bool> openStoreListing() async {
+    if (_isIOS) {
+      if (await _launch(_appStoreReviewUri)) return true;
+      try {
+        // iOS needs the app's id; without it the plugin refuses to open.
+        await _inAppReview.openStoreListing(appStoreId: _appStoreId);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
     try {
+      // On Android the plugin finds the app by its own package name.
       await _inAppReview.openStoreListing();
-    } catch (e) {
+      return true;
+    } catch (_) {
+      return _launch(_playStoreUri);
+    }
+  }
+
+  Future<bool> _launch(Uri uri) async {
+    try {
+      return await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      return false;
     }
   }
 

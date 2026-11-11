@@ -30,6 +30,16 @@
 	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- Odoo servers are entered by the user and some (e.g. self-hosted or
+		     http:// Easy Instance addresses) are not HTTPS. Android already
+		     allows this (usesCleartextTraffic); without it iOS refuses to load
+		     them in the in-app WebView used for two-factor sign-in. Limited to
+		     web content: the app's own API calls are not affected by ATS. -->
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>This app may use the camera for scanning or attachments.</string>
 	<key>NSContactsUsageDescription</key>

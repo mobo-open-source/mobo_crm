@@ -270,6 +270,35 @@ class _CompactActivityOverlayState extends State<CompactActivityOverlay> {
     );
   }
 
+  /// Shown instead of "No activities found" when the list could not be loaded,
+  /// so a missing access right is not mistaken for an empty list.
+  Widget _buildLoadError(String message, bool isDark) {
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(
+            Icons.warning_amber_rounded,
+            size: 48,
+            color: StatusColors.statusOrange,
+          ),
+          const SizedBox(height: 12),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 14,
+              height: 1.4,
+              fontWeight: FontWeight.w500,
+              color: isDark ? Colors.grey[300] : Colors.grey[700],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Classifies activity based on deadline relative to current time
   ///
   /// Returns: 'overdue', 'today', 'tomorrow', or 'planned'
@@ -407,6 +436,8 @@ class _CompactActivityOverlayState extends State<CompactActivityOverlay> {
                               ],
                             ),
                           )
+                        : provider.activities.isEmpty && provider.error != null
+                        ? _buildLoadError(provider.error!, isDark)
                         : provider.activities.isEmpty
                             ? Padding(
                                 padding: const EdgeInsets.all(24),

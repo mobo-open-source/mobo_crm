@@ -8,8 +8,8 @@ import '../utils/globals.dart';
 /// and optionally provide feedback.
 ///
 /// If the user gives a rating of 4 stars or higher, the [onGoodReview]
-/// callback is triggered. Typically, this is used to request an
-/// in-app store review.
+/// callback is triggered. Typically, this is used to send them to the app's
+/// store page to leave a review (App Store on iOS, Google Play on Android).
 ///
 /// If the user gives a rating lower than 4 stars, the [onBadReview]
 /// callback is triggered. This is generally used to collect feedback
@@ -41,7 +41,8 @@ class CustomRatingDialog extends StatefulWidget {
   ///
   /// - Good reviews (≥ 4 stars):
   ///   - Stops future prompts
-  ///   - Triggers the in-app review request
+  ///   - Opens the app's store page: the App Store on iOS, Google Play on
+  ///     Android
   ///
   /// - Bad reviews (< 4 stars):
   ///   - Postpones the review prompt for 6 months

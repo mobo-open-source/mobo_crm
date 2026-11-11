@@ -9,7 +9,8 @@ import 'package:mobo_crm/models/activity_model/activity_model.dart';
 import 'package:mobo_crm/screens/lead/providers/activity_create_provider.dart';
 import 'package:mobo_crm/models/models.dart';
 import 'package:mobo_crm/screens/myActivities/activities_main/activity_main_provider.dart';
-import 'package:mobo_crm/utils/snackbar.dart';
+import 'package:mobo_crm/utils/app_theme.dart';
+import 'package:mobo_crm/utils/odoo_failure.dart';
 import 'package:odoo_rpc/odoo_rpc.dart';
 import 'package:provider/provider.dart';
 
@@ -57,6 +58,10 @@ class _AddActivityDialogState extends State<AddActivityDialog> {
   String? dateError;
 
   bool _isCreating = false;
+
+  /// Why the last attempt to create the activity failed, shown inside the
+  /// dialog. A SnackBar cannot be used for this: it is drawn behind a dialog.
+  OdooFailure? _createFailure;
 
   String? selectedDate;
   ActivityType? selectedActivity;
@@ -168,6 +173,7 @@ class _AddActivityDialogState extends State<AddActivityDialog> {
                             onSelectionChanged: (item) {
                               setState(() {
                                 recordError = null;
+                                _createFailure = null;
                                 _globalResId = item?['id'];
                               });
                             },
@@ -211,6 +217,7 @@ class _AddActivityDialogState extends State<AddActivityDialog> {
                           onSelectionChanged: (activity) {
                             setState(() {
                               activityTypeError = null;
+                              _createFailure = null;
                               selectedActivity = activity;
                             });
                           },
@@ -266,6 +273,7 @@ class _AddActivityDialogState extends State<AddActivityDialog> {
                           onSelectionChanged: (person) {
                             setState(() {
                               assigneeError = null;
+                              _createFailure = null;
                               selectedAssignee = person;
                             });
                           },
@@ -314,6 +322,7 @@ class _AddActivityDialogState extends State<AddActivityDialog> {
                           onDateChanged: (date) {
                             setState(() {
                               dateError = null;
+                              _createFailure = null;
                               selectedDate = date;
                             });
                           },
@@ -333,6 +342,16 @@ class _AddActivityDialogState extends State<AddActivityDialog> {
                   ),
                 ),
               ),
+              // Outside the scrolling form, so it is in view whatever the
+              // dialog's height and wherever the form is scrolled to.
+              if (_createFailure != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+                  child: _ActivityErrorBanner(
+                    failure: _createFailure!,
+                    isDark: isDark,
+                  ),
+                ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
                 child: Consumer<ActivityCreateProvider>(
@@ -374,7 +393,10 @@ class _AddActivityDialogState extends State<AddActivityDialog> {
                                   return;
                                 }
 
-                                setState(() => _isCreating = true);
+                                setState(() {
+                                  _isCreating = true;
+                                  _createFailure = null;
+                                });
                                 try {
                                   final success = await _createActivity(
                                     client: odooClient.client!,
@@ -420,12 +442,15 @@ class _AddActivityDialogState extends State<AddActivityDialog> {
   /// 2. Verifies that the target model actually exists in Odoo
   /// 3. Builds the activity payload
   /// 4. Calls `mail.activity.create(...)`
-  /// 5. Shows error snackbar on failure
+  /// 5. On failure, shows the reason inside the dialog ([_createFailure])
   ///
-  /// Returns `true` if the activity was created successfully,
-  /// `false` otherwise (also shows error message when appropriate).
+  /// Returns `true` if the activity was created successfully, `false`
+  /// otherwise.
   ///
-  /// Throws exceptions internally for invalid states (caught and shown as snackbar).
+  /// The reason is read from Odoo's own error, so a user who lacks the access
+  /// rights is told that (and which groups may do it) instead of a generic
+  /// "Error creating activity". It is shown inline because a SnackBar would be
+  /// drawn behind this dialog.
   Future<bool> _createActivity({
     required OdooClient client,
     required BuildContext context,
@@ -496,10 +521,86 @@ class _AddActivityDialogState extends State<AddActivityDialog> {
 
       return true;
     } catch (e) {
-      if (context.mounted) {
-        CustomSnackbar.showError(context, 'Error creating activity');
+      if (mounted) {
+        setState(() {
+          _createFailure = describeOdooFailure(
+            e,
+            action: 'schedule an activity on this record',
+          );
+        });
       }
       return false;
     }
+  }
+}
+
+/// Explains inside the dialog why an activity could not be created.
+///
+/// Orange for something the user can do nothing about here (missing access
+/// rights, data Odoo refused), red for a failure of the request itself.
+class _ActivityErrorBanner extends StatelessWidget {
+  const _ActivityErrorBanner({required this.failure, required this.isDark});
+
+  final OdooFailure failure;
+  final bool isDark;
+
+  @override
+  Widget build(BuildContext context) {
+    final bool isAccess = failure.isAccessDenied;
+    final bool isValidation = failure.kind == OdooFailureKind.validation;
+    final Color color = (isAccess || isValidation)
+        ? StatusColors.statusOrange
+        : StatusColors.statusRed;
+    final IconData icon = isAccess
+        ? Icons.lock_outline_rounded
+        : isValidation
+            ? Icons.info_outline_rounded
+            : Icons.error_outline_rounded;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        border: Border.all(color: color.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 20, color: color),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  failure.headline,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: AppTheme.valueColor(isDark),
+                  ),
+                ),
+                if (failure.detail != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    failure.detail!,
+                    maxLines: 6,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      height: 1.35,
+                      color: AppTheme.secondaryLabelColor(isDark),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

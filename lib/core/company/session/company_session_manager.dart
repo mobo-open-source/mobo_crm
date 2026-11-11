@@ -608,19 +608,34 @@ class CompanySessionManager {
     });
   }
 
+  /// Calls the mail store endpoint that backs the web client's systray.
+  ///
+  /// The route and its body changed between releases:
+  /// - Odoo 18: `/mail/data` with `systray_get_activities: true` (no
+  ///   [fetchParams]).
+  /// - Odoo 19: `/mail/data` with `fetch_params: ['systray_get_activities']`.
+  /// - Odoo 20: `/mail/data` was removed; the same `fetch_params` body goes to
+  ///   `/mail/store`.
+  ///
+  /// [context] is forwarded in every variant so the server resolves the same
+  /// user language, timezone and allowed companies as the web client does.
   static Future<dynamic> callMailData({
     Map<String, dynamic>? context,
     bool systrayGetActivities = true,
     List<String>? fetchParams,
+    String route = '/mail/data',
   }) async {
     return callWithSession((client) async {
       final Map<String, dynamic> body = fetchParams != null
-          ? {'fetch_params': fetchParams}
+          ? {
+              'fetch_params': fetchParams,
+              if (context != null) 'context': context,
+            }
           : {
               'systray_get_activities': systrayGetActivities,
               'context': context ?? {},
             };
-      return await client.callRPC('/mail/data', 'call', body);
+      return await client.callRPC(route, 'call', body);
     });
   }
 

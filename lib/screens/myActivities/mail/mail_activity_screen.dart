@@ -7,6 +7,7 @@ import 'package:mobo_crm/global_methods/widgets/transition/page_transition.dart'
 import 'package:mobo_crm/models/activity_model/activity_model.dart';
 import 'package:mobo_crm/screens/myActivities/mail/mail_activity_list_screen.dart';
 import 'package:mobo_crm/screens/myActivities/mail/provider/mail_data_provider.dart';
+import 'package:mobo_crm/utils/app_theme.dart';
 import 'package:odoo_rpc/odoo_rpc.dart';
 import 'package:provider/provider.dart';
 import 'package:shimmer/shimmer.dart';
@@ -15,6 +16,10 @@ import '../../../core/company/session/company_session_manager.dart';
 import '../../../global_methods/services/global_error_handler.dart';
 
 /// Screen displaying the current user's scheduled mail activities.
+///
+/// One card per model, with the same overdue / today / planned figures the
+/// Odoo web client shows in its activity menu. Tap a card to see the
+/// activities behind the numbers.
 class MailDataScreen extends StatefulWidget {
   const MailDataScreen({super.key});
 
@@ -91,16 +96,14 @@ class _MailDataScreenState extends State<MailDataScreen> {
     return _buildCenteredLottie(
       lottie: 'assets/empty_ghost.json',
       title: 'No Mail Activities Found',
+      subtitle: 'Pull down to refresh.',
       isDark: isDark,
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final sw = MediaQuery.of(context).size.width;
-    final scale = (sw / 375).clamp(0.8, 1.2);
 
     return ChangeNotifierProvider(
       create: (_) => MailDataProvider()..fetchMailData(),
@@ -119,7 +122,7 @@ class _MailDataScreenState extends State<MailDataScreen> {
             'Mail Activities',
             style: TextStyle(
               fontWeight: FontWeight.bold,
-              fontSize: (20 * scale).clamp(16, 24),
+              fontSize: 20,
               color: isDark ? Colors.white : Colors.black,
             ),
           ),
@@ -131,6 +134,7 @@ class _MailDataScreenState extends State<MailDataScreen> {
                     ctx,
                     SlidingPageTransitionRL(
                       page: MailActivityListScreen(
+                        // id 0 / empty model = every activity of the user.
                         group: MailActivityGroup(
                           id: 0,
                           name: '',
@@ -141,6 +145,7 @@ class _MailDataScreenState extends State<MailDataScreen> {
                           overdueCount: 0,
                           plannedCount: 0,
                         ),
+                        modelNames: ctx.read<MailDataProvider>().modelNames,
                       ),
                     ),
                   );
@@ -148,14 +153,14 @@ class _MailDataScreenState extends State<MailDataScreen> {
                 child: Text(
                   'View All',
                   style: TextStyle(
-                    fontSize: (14 * scale).clamp(11, 17),
+                    fontSize: 14,
                     fontWeight: FontWeight.w600,
                     color: Theme.of(ctx).primaryColor,
                   ),
                 ),
               ),
             ),
-            SizedBox(width: 4 * scale),
+            const SizedBox(width: 4),
           ],
           backgroundColor: isDark ? const Color(0xFF181A20) : Colors.grey[50],
           automaticallyImplyLeading: false,
@@ -173,26 +178,42 @@ class _MailDataScreenState extends State<MailDataScreen> {
               if (provider.hasError && provider.activityGroups.isEmpty) {
                 return ErrorScreen(
                   error: provider.errorMessage!,
-                  onRetry: () => provider.fetchMailData(),
+                  onRetry: () => provider.fetchMailData(isNotify: true),
                 );
               }
               if (provider.activityGroups.isEmpty) {
-                return Center(child: _buildEmptyState(context));
+                return RefreshIndicator(
+                  onRefresh: () => provider.fetchMailData(silent: true),
+                  child: _buildEmptyState(context),
+                );
               }
-              return ListView.builder(
-                padding: EdgeInsets.symmetric(
-                  vertical: (6 * scale).clamp(4, 10),
+
+              final groups = provider.activityGroups;
+              final hasNotice = provider.isShowingCached;
+              return RefreshIndicator(
+                onRefresh: () => provider.fetchMailData(silent: true),
+                child: ListView.builder(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                  itemCount: groups.length + (hasNotice ? 1 : 0),
+                  itemBuilder: (context, index) {
+                    if (hasNotice) {
+                      if (index == 0) {
+                        return MailCachedDataNotice(
+                          isDark: isDark,
+                          message:
+                              "Can't reach the server. These counts were saved on this device and may be out of date.",
+                        );
+                      }
+                      index -= 1;
+                    }
+                    return _buildActivityCard(
+                      context,
+                      groups[index],
+                      provider.modelNames,
+                    );
+                  },
                 ),
-                itemCount: provider.activityGroups.length,
-                itemBuilder: (context, index) {
-                  final group = provider.activityGroups[index];
-                  return Padding(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: (16 * scale).clamp(10, 24),
-                    ),
-                    child: _buildActivityCard(context, group, colorScheme),
-                  );
-                },
               );
             },
           ),
@@ -201,103 +222,82 @@ class _MailDataScreenState extends State<MailDataScreen> {
     );
   }
 
+  Widget _buildGroupIcon(MailActivityGroup group) {
+    final primaryColor = AppTheme.primaryColor;
+
+    Widget fallback() => Container(
+          color: primaryColor.withValues(alpha: 0.1),
+          child: const Icon(Icons.work_outline,
+              color: AppTheme.primaryColor, size: 18),
+        );
+
+    return SizedBox(
+      width: 32,
+      height: 32,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(AppRadius.compact),
+        child: _client != null && group.icon.isNotEmpty
+            ? CachedNetworkImage(
+                imageUrl: '${_client!.baseURL}${group.icon}',
+                httpHeaders: {
+                  ...CompanySessionManager.skipSessionRotationHeader,
+                  'Cookie': 'session_id=${_client!.sessionId?.id ?? ''}',
+                },
+                fit: BoxFit.cover,
+                placeholder: (context, url) => Shimmer.fromColors(
+                  baseColor: primaryColor.withValues(alpha: 0.1),
+                  highlightColor: primaryColor.withValues(alpha: 0.05),
+                  child: Container(color: Colors.white),
+                ),
+                errorWidget: (context, url, error) => fallback(),
+              )
+            : fallback(),
+      ),
+    );
+  }
+
   Widget _buildActivityCard(
     BuildContext context,
-    dynamic group,
-    ColorScheme colorScheme,
+    MailActivityGroup group,
+    Map<String, String> modelNames,
   ) {
-    final primaryColor = Theme.of(context).primaryColor;
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final sw = MediaQuery.of(context).size.width;
-    final scale = (sw / 375).clamp(0.8, 1.2);
 
-    final cardPad = (16 * scale).clamp(12.0, 20.0);
-    final iconSize = (28 * scale).clamp(22.0, 34.0);
-    final headerFontSize = (18 * scale).clamp(14.0, 22.0);
-    final statGap = (8 * scale).clamp(4.0, 12.0);
-
-    return Container(
-      margin: EdgeInsets.only(bottom: (18 * scale).clamp(12.0, 24.0)),
-      decoration: BoxDecoration(
-        color: isDark ? Colors.grey[850] : Colors.white,
-        borderRadius: BorderRadius.circular((16 * scale).clamp(12.0, 20.0)),
-        boxShadow: [
-          BoxShadow(
-            color: isDark
-                ? Colors.black.withValues(alpha: 0.18)
-                : Colors.black.withValues(alpha: 0.06),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
+    return InkWell(
+      borderRadius: BorderRadius.circular(AppRadius.md),
+      onTap: () {
+        Navigator.push(
+          context,
+          SlidingPageTransitionRL(
+            page: MailActivityListScreen(group: group, modelNames: modelNames),
           ),
-        ],
-      ),
-      child: InkWell(
-        borderRadius: BorderRadius.circular((12 * scale).clamp(8.0, 16.0)),
-        onTap: () {
-          Navigator.push(
-            context,
-            SlidingPageTransitionRL(
-              page: MailActivityListScreen(group: group),
-            ),
-          );
-        },
+        );
+      },
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        decoration: BoxDecoration(
+          color: AppTheme.surface(isDark),
+          borderRadius: BorderRadius.circular(AppRadius.md),
+          border: Border.all(color: AppTheme.cardBorder(isDark), width: 0.5),
+          boxShadow: const [AppShadows.cardShadow],
+        ),
         child: Padding(
-          padding: EdgeInsets.all(cardPad),
+          padding: const EdgeInsets.all(14),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  SizedBox(
-                    width: iconSize,
-                    height: iconSize,
-                    child: ClipRRect(
-                      borderRadius:
-                          BorderRadius.circular((5 * scale).clamp(3.0, 7.0)),
-                      child: _client != null && group.icon.isNotEmpty
-                          ? CachedNetworkImage(
-                              imageUrl: '${_client!.baseURL}${group.icon}',
-                              httpHeaders: {
-                                ...CompanySessionManager.skipSessionRotationHeader,
-                                'Cookie':
-                                    'session_id=${_client!.sessionId?.id ?? ''}',
-                              },
-                              fit: BoxFit.cover,
-                              placeholder: (context, url) => Shimmer.fromColors(
-                                baseColor:
-                                    primaryColor.withValues(alpha: 0.1),
-                                highlightColor:
-                                    primaryColor.withValues(alpha: 0.05),
-                                child: Container(color: Colors.white),
-                              ),
-                              errorWidget: (context, url, error) => Container(
-                                color: primaryColor.withValues(alpha: 0.1),
-                                child: Icon(
-                                  Icons.work_outline,
-                                  color: primaryColor,
-                                  size: (16 * scale).clamp(12.0, 20.0),
-                                ),
-                              ),
-                            )
-                          : Container(
-                              color: primaryColor.withValues(alpha: 0.1),
-                              child: Icon(
-                                Icons.work_outline,
-                                color: primaryColor,
-                                size: (16 * scale).clamp(12.0, 20.0),
-                              ),
-                            ),
-                    ),
-                  ),
-                  SizedBox(width: (10 * scale).clamp(6.0, 14.0)),
+                  _buildGroupIcon(group),
+                  const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      group.name,
+                      group.name.isEmpty ? group.model : group.name,
                       style: TextStyle(
-                        fontSize: headerFontSize,
+                        fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: isDark ? Colors.white : Colors.black87,
+                        color: AppTheme.valueColor(isDark),
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -305,52 +305,47 @@ class _MailDataScreenState extends State<MailDataScreen> {
                   ),
                   Icon(
                     Icons.arrow_forward_ios,
-                    size: (16 * scale).clamp(12.0, 18.0),
-                    color: isDark ? Colors.grey[400] : Colors.black54,
+                    size: 14,
+                    color: AppTheme.secondaryLabelColor(isDark),
                   ),
                 ],
               ),
-              SizedBox(height: (14 * scale).clamp(10.0, 18.0)),
+              const SizedBox(height: 12),
               Row(
                 children: [
+                  // Total counts every state. Odoo's own total_count leaves
+                  // planned activities out, which made "Total" smaller than
+                  // the sum of the tiles next to it.
                   _buildStatItem(
-                    context: context,
                     icon: Icons.assessment,
-                    label: "Total",
-                    count: group.totalCount ?? 0,
-                    color: primaryColor,
+                    label: 'Total',
+                    count: group.allCount,
+                    color: AppTheme.primaryColor,
                     isDark: isDark,
-                    scale: scale,
                   ),
-                  SizedBox(width: statGap),
+                  const SizedBox(width: 8),
                   _buildStatItem(
-                    context: context,
-                    icon: Icons.today,
-                    label: "Today",
-                    count: group.todayCount ?? 0,
-                    color: Colors.orange[700]!,
-                    isDark: isDark,
-                    scale: scale,
-                  ),
-                  SizedBox(width: statGap),
-                  _buildStatItem(
-                    context: context,
                     icon: Icons.warning_amber_rounded,
-                    label: "Overdue",
-                    count: group.overdueCount ?? 0,
-                    color: Colors.red[700]!,
+                    label: 'Overdue',
+                    count: group.overdueCount,
+                    color: mailActivityStateColor('overdue'),
                     isDark: isDark,
-                    scale: scale,
                   ),
-                  SizedBox(width: statGap),
+                  const SizedBox(width: 8),
                   _buildStatItem(
-                    context: context,
-                    icon: Icons.check_circle_outline,
-                    label: "Planned",
-                    count: group.plannedCount ?? 0,
-                    color: Colors.green[700]!,
+                    icon: Icons.today,
+                    label: 'Today',
+                    count: group.todayCount,
+                    color: mailActivityStateColor('today'),
                     isDark: isDark,
-                    scale: scale,
+                  ),
+                  const SizedBox(width: 8),
+                  _buildStatItem(
+                    icon: Icons.event_available_outlined,
+                    label: 'Planned',
+                    count: group.plannedCount,
+                    color: mailActivityStateColor('planned'),
+                    isDark: isDark,
                   ),
                 ],
               ),
@@ -362,21 +357,18 @@ class _MailDataScreenState extends State<MailDataScreen> {
   }
 
   Widget _buildStatItem({
-    required BuildContext context,
     required IconData icon,
     required String label,
     required int count,
     required Color color,
     required bool isDark,
-    required double scale,
   }) {
     return Expanded(
       child: Container(
-        padding: EdgeInsets.symmetric(vertical: (10 * scale).clamp(7.0, 13.0)),
+        padding: const EdgeInsets.symmetric(vertical: 10),
         decoration: BoxDecoration(
           color: isDark ? Colors.grey[800] : Colors.white,
-          borderRadius:
-              BorderRadius.circular((10 * scale).clamp(7.0, 13.0)),
+          borderRadius: BorderRadius.circular(AppRadius.md),
           border: Border.all(
             color: isDark ? Colors.grey[700]! : Colors.grey[200]!,
             width: 1,
@@ -385,23 +377,31 @@ class _MailDataScreenState extends State<MailDataScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon,
-                size: (22 * scale).clamp(16.0, 26.0), color: color),
-            SizedBox(height: (5 * scale).clamp(3.0, 7.0)),
+            Container(
+              width: 30,
+              height: 30,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: color.withValues(alpha: 0.1),
+              ),
+              child: Icon(icon, size: 16, color: color),
+            ),
+            const SizedBox(height: 6),
             Text(
               count.toString(),
               style: TextStyle(
                 fontWeight: FontWeight.bold,
-                fontSize: (17 * scale).clamp(13.0, 20.0),
-                color: isDark ? Colors.white : Colors.black87,
+                fontSize: 18,
+                color: AppTheme.valueColor(isDark),
               ),
             ),
-            SizedBox(height: (2 * scale).clamp(1.0, 4.0)),
+            const SizedBox(height: 2),
             Text(
               label,
               style: TextStyle(
-                fontSize: (11 * scale).clamp(9.0, 13.0),
-                color: isDark ? Colors.grey[400] : Colors.black54,
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+                color: AppTheme.secondaryLabelColor(isDark),
               ),
             ),
           ],

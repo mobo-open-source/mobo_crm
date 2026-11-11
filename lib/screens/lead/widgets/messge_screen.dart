@@ -389,7 +389,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
                                                     TextSpan(
                                                         text: '→',
                                                         style: TextStyle(
-                                                            fontSize: 25)),
+                                                            fontSize: 16)),
                                                     TextSpan(
                                                         text: newval,
                                                         style: TextStyle(

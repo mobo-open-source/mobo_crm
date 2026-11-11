@@ -17,6 +17,13 @@ class AuthService {
   /// Local device biometric authentication handler
   final LocalAuthentication _auth = LocalAuthentication();
 
+  /// Longest an authentication request may wait for the server.
+  ///
+  /// The shared [ioClient] has no response timeout of its own, so a server that
+  /// accepts the connection and then stalls would otherwise leave the sign-in
+  /// spinning forever.
+  static const Duration _requestTimeout = Duration(seconds: 30);
+
   /// Performs biometric authentication using device security.
   ///
   /// Flow:
@@ -94,10 +101,17 @@ class AuthService {
         "params": {},
         "id": 1,
       }),
-    );
+    ).timeout(_requestTimeout);
 
     final data = jsonDecode(response.body);
-    return Map<String, dynamic>.from(data['result']);
+    final result = data is Map ? data['result'] : null;
+    if (result is! Map) {
+      // Odoo answers with an error (and no result) for a session that is not
+      // signed in, e.g. the half-finished one it hands out while it still
+      // waits for the two-factor code.
+      throw Exception('The session is not signed in.');
+    }
+    return Map<String, dynamic>.from(result);
   }
 
   /// Refuses a session whose database has expired.
@@ -136,7 +150,7 @@ class AuthService {
         'Cookie': 'session_id=$sessionId',
       },
       body: jsonEncode(payload),
-    );
+    ).timeout(_requestTimeout);
 
     final data = jsonDecode(res.body);
     if (data['error'] != null) throw data['error'];
@@ -374,7 +388,7 @@ class AuthService {
         'params': {'db': database, 'login': username, 'password': password},
         'id': DateTime.now().millisecondsSinceEpoch,
       }),
-    );
+    ).timeout(_requestTimeout);
 
     if (response.statusCode != 200) {
       throw Exception('Authentication error');

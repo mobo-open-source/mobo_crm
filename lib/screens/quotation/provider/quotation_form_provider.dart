@@ -3042,8 +3042,7 @@ class QuotationFormProvider extends ChangeNotifier {
         }
 
         if (context.mounted) {
-          CustomSnackbar.showSuccess(
-              context, 'Quotation Created Successfully ID: $saleId');
+          CustomSnackbar.showSuccess(context, 'Quotation Created Successfully');
         }
         isLoading = false;
 

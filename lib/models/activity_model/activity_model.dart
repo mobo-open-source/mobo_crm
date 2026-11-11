@@ -165,10 +165,22 @@ class MailActivityGroup {
   final String name;
   final String model;
   final String icon;
+
+  /// Odoo's own `total_count`: activities that need attention now, i.e.
+  /// **overdue + today**. Planned activities are *not* part of it (this is the
+  /// number on the web client's systray badge). Use [allCount] for a sum of
+  /// every state.
   final int totalCount;
   final int todayCount;
   final int overdueCount;
   final int plannedCount;
+
+  /// Ids of the activities the server listed for this group.
+  ///
+  /// Odoo sends them for the catch-all "Other activities" group (activities
+  /// without a readable document) and, on Odoo 20, for every group. Empty when
+  /// the server did not send them or the group came from the local cache.
+  final List<int> activityIds;
 
   /// Creates a [MailActivityGroup] instance.
   MailActivityGroup({
@@ -180,19 +192,53 @@ class MailActivityGroup {
     required this.todayCount,
     required this.overdueCount,
     required this.plannedCount,
+    this.activityIds = const [],
   });
 
+  /// Model name Odoo uses for activities that are not tied to a readable
+  /// document.
+  static const String otherActivitiesModel = 'mail.activity';
+
+  /// True for the catch-all "Other activities" group.
+  bool get isOtherActivities => model == otherActivitiesModel;
+
+  /// Overdue + today: what still needs doing (matches Odoo's systray badge).
+  int get dueCount => overdueCount + todayCount;
+
+  /// Overdue + today + planned: every activity the server counted.
+  int get allCount => overdueCount + todayCount + plannedCount;
+
   /// Creates a [MailActivityGroup] from JSON data.
+  ///
+  /// Odoo 18, 19 and 20 all send the same keys, but numbers may arrive as
+  /// `int`, `double` or numeric strings depending on the transport, and
+  /// optional text fields as `false`. Anything unusable falls back to a safe
+  /// default instead of throwing.
   factory MailActivityGroup.fromJson(Map<String, dynamic> json) {
+    int asInt(dynamic value) {
+      if (value is int) return value;
+      if (value is num) return value.toInt();
+      if (value is String) return int.tryParse(value) ?? 0;
+      return 0;
+    }
+
+    String asText(dynamic value) =>
+        value is String && value != 'false' ? value : '';
+
+    final rawIds = json['activity_ids'];
+
     return MailActivityGroup(
-      id: json['id'] as int? ?? 0,
-      name: json['name'] as String? ?? '',
-      model: json['model'] as String? ?? '',
-      icon: json['icon'] as String? ?? '',
-      totalCount: json['total_count'] as int? ?? 0,
-      todayCount: json['today_count'] as int? ?? 0,
-      overdueCount: json['overdue_count'] as int? ?? 0,
-      plannedCount: json['planned_count'] as int? ?? 0,
+      id: asInt(json['id']),
+      name: asText(json['name']),
+      model: asText(json['model']),
+      icon: asText(json['icon']),
+      totalCount: asInt(json['total_count']),
+      todayCount: asInt(json['today_count']),
+      overdueCount: asInt(json['overdue_count']),
+      plannedCount: asInt(json['planned_count']),
+      activityIds: rawIds is List
+          ? rawIds.whereType<num>().map((e) => e.toInt()).toList()
+          : const [],
     );
   }
 
@@ -207,6 +253,7 @@ class MailActivityGroup {
       'today_count': todayCount,
       'overdue_count': overdueCount,
       'planned_count': plannedCount,
+      'activity_ids': activityIds,
     };
   }
 }
